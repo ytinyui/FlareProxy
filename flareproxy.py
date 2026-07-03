@@ -1,6 +1,8 @@
 import json
 import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import select
+import socket
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import requests
 
@@ -9,8 +11,8 @@ FLARESOLVERR_URL = os.getenv("FLARESOLVERR_URL", "http://flaresolverr:8191/v1")
 
 
 class ProxyHTTPRequestHandler(BaseHTTPRequestHandler):
-    def handle_request(self):
-        """Handle the core logic for GET and CONNECT requests."""
+    def do_GET(self):
+        """Handle GET requests."""
         try:
             # Prepare the payload
             headers = {"Content-Type": "application/json"}
@@ -39,17 +41,47 @@ class ProxyHTTPRequestHandler(BaseHTTPRequestHandler):
             error_message = json.dumps({"error": str(e)})
             self.wfile.write(error_message.encode("utf-8"))
 
-    def do_GET(self):
-        """Handle GET requests."""
-        self.handle_request()
-
     def do_CONNECT(self):
-        """Handle CONNECT requests."""
-        self.handle_request()
+        """Handle CONNECT requests by establishing a raw TCP tunnel."""
+        try:
+            host, _, port = self.path.partition(":")
+            port = int(port)
+        except (ValueError, AttributeError):
+            self.send_error(400, "Bad CONNECT target")
+            return
+
+        try:
+            remote = socket.create_connection((host, port), timeout=10)
+        except (socket.gaierror, socket.error) as e:
+            self.send_error(502, f"Cannot connect to {host}:{port}: {e}")
+            return
+
+        # Send 200 via raw socket so we don't mix with wfile buffering
+        try:
+            self.request.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        except socket.error:
+            remote.close()
+            return
+
+        # Bidirectional relay using select
+        socks = [self.request, remote]
+        try:
+            while True:
+                readable, _, exceptional = select.select(socks, [], socks, 30)
+                if exceptional or not readable:
+                    break
+                for s in readable:
+                    peer = remote if s is self.request else self.request
+                    data = s.recv(8192)
+                    if not data:
+                        return
+                    peer.sendall(data)
+        finally:
+            remote.close()
 
 
 if __name__ == "__main__":
     server_address = ("", 8080)
-    httpd = HTTPServer(server_address, ProxyHTTPRequestHandler)
+    httpd = ThreadingHTTPServer(server_address, ProxyHTTPRequestHandler)
     print("FlareProxy adapter running on port 8080")
     httpd.serve_forever()
