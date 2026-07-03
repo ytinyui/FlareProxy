@@ -1,6 +1,7 @@
 import json
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
 import requests
 
 # Get FlareSolverr URL from environment variable or use default
@@ -8,7 +9,6 @@ FLARESOLVERR_URL = os.getenv("FLARESOLVERR_URL", "http://flaresolverr:8191/v1")
 
 
 class ProxyHTTPRequestHandler(BaseHTTPRequestHandler):
-
     def handle_request(self):
         """Handle the core logic for GET and CONNECT requests."""
         try:
@@ -17,7 +17,7 @@ class ProxyHTTPRequestHandler(BaseHTTPRequestHandler):
             data = {
                 "cmd": "request.get",
                 "url": self.path.replace("http", "https"),
-                "maxTimeout": 60000
+                "maxTimeout": 60000,
             }
 
             # Send the POST request to FlareSolverr
@@ -28,7 +28,9 @@ class ProxyHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_response(response.status_code)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(bytes(json_response.get("solution", {}).get("response", ""), "utf-8"))
+            self.wfile.write(
+                bytes(json_response.get("solution", {}).get("response", ""), "utf-8")
+            )
 
         except Exception as e:
             self.send_response(500)
